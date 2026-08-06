@@ -1,0 +1,50 @@
+// =============================================================
+// INSTALACIÓN PWA - Botón a los 5 segundos
+// =============================================================
+const installBtn = document.getElementById('installPwaBtn');
+let deferredPrompt = null;
+
+// Si ya está instalada (modo standalone), no mostramos nada
+const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+if (isStandalone) {
+    installBtn.style.display = 'none';
+} else {
+    // Escuchar el evento beforeinstallprompt
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        // No mostramos aún, esperamos los 5 segundos
+    });
+
+    // Mostrar el botón después de 5 segundos (si no está instalada)
+    setTimeout(() => {
+        if (!isStandalone) {
+            installBtn.style.display = 'flex';
+        }
+    }, 5000);
+
+    // Acción al hacer clic
+    installBtn.addEventListener('click', async () => {
+        if (deferredPrompt) {
+            // Diálogo nativo de instalación (Chrome Android)
+            deferredPrompt.prompt();
+            const result = await deferredPrompt.userChoice;
+            if (result.outcome === 'accepted') {
+                console.log('✅ PWA instalada');
+                installBtn.style.display = 'none';
+            } else {
+                console.log('❌ Instalación rechazada');
+            }
+            deferredPrompt = null;
+        } else {
+            // Fallback para navegadores sin beforeinstallprompt (Safari, etc.)
+            setToast('📲 Abre el menú de Chrome y selecciona "Agregar a la pantalla de inicio"', 'info');
+        }
+    });
+
+    // Si la instalación ocurre desde otro lugar (p.ej. el navegador), ocultamos el botón
+    window.addEventListener('appinstalled', () => {
+        installBtn.style.display = 'none';
+        setToast('🎉 App instalada correctamente', 'success');
+    });
+}
