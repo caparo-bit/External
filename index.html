@@ -8,9 +8,10 @@
     <!-- PWA -->
     <link rel="manifest" href="manifest.json" />
     <meta name="theme-color" content="#1f8a3c" />
-    <link rel="icon" type="image/png" sizes="192x192" href="icon-192(1).png" />
-    <link rel="icon" type="image/png" sizes="512x512" href="icon-512(1).png" />
-    <link rel="apple-touch-icon" href="icon-192.png" />
+    <!-- ICONOS CORREGIDOS: ahora con (1) -->
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192 (1).png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="icon-512 (1).png" />
+    <link rel="apple-touch-icon" href="icon-192 (1).png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Smart TD" />
@@ -357,7 +358,12 @@
                 </div>
             </div>
         </div>
-    </div>
+
+        <!-- BOTÓN DE INSTALACIÓN (AHORA DENTRO DEL BODY) -->
+        <button id="installButton" style="display:none; position:fixed; bottom:20px; right:20px; z-index:9999; background:#1f8a3c; color:#fff; border:none; border-radius:50px; padding:14px 22px; font-size:1rem; font-weight:700; box-shadow:0 8px 20px rgba(0,0,0,0.5); cursor:pointer; -webkit-tap-highlight-color:transparent; align-items:center; gap:8px;">
+            📲 Instalar App
+        </button>
+    </div> <!-- fin .app -->
 
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -1015,8 +1021,8 @@
                 navigator.serviceWorker.ready.then(reg => {
                     reg.showNotification('📨 NUEVO DESPACHO', {
                         body: texto,
-                        icon: 'icon-192.png',
-                        badge: 'icon-192.png',
+                        icon: 'icon-192 (1).png',
+                        badge: 'icon-192 (1).png',
                         vibrate: [500, 200, 500, 200, 500],
                         tag: 'despacho-alert',
                         renotify: true,
@@ -1859,10 +1865,49 @@
         logToConsole('info', 'Ntfy URL: ' + NTFY_SSE_URL);
 
         console.log('✅ Aplicación iniciada');
+
+        // =============================================================
+        // INSTALACIÓN PWA - Botón a los 5 segundos
+        // =============================================================
+        const installBtn = document.getElementById('installButton');
+        let deferredPrompt = null;
+
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+        if (isStandalone) {
+            installBtn.style.display = 'none';
+        } else {
+            window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                deferredPrompt = e;
+            });
+
+            setTimeout(() => {
+                if (!isStandalone) {
+                    installBtn.style.display = 'flex';
+                }
+            }, 5000);
+
+            installBtn.addEventListener('click', async () => {
+                if (deferredPrompt) {
+                    deferredPrompt.prompt();
+                    const result = await deferredPrompt.userChoice;
+                    if (result.outcome === 'accepted') {
+                        console.log('✅ PWA instalada');
+                        installBtn.style.display = 'none';
+                    } else {
+                        console.log('❌ Instalación rechazada');
+                    }
+                    deferredPrompt = null;
+                } else {
+                    setToast('📲 Abre el menú de Chrome y selecciona "Agregar a la pantalla de inicio"', 'info');
+                }
+            });
+
+            window.addEventListener('appinstalled', () => {
+                installBtn.style.display = 'none';
+                setToast('🎉 App instalada correctamente', 'success');
+            });
+        }
     </script>
 </body>
-    <!-- Botón de instalación flotante -->
-<div id="installButton" style="display:none; position:fixed; bottom:20px; right:20px; z-index:9999; background:#1f8a3c; color:#fff; border:none; border-radius:50px; padding:14px 22px; font-size:1rem; font-weight:700; box-shadow:0 8px 20px rgba(0,0,0,0.5); cursor:pointer; -webkit-tap-highlight-color:transparent; display:none; align-items:center; gap:8px;">
-    📲 Instalar App
-</div>
-  </html>
+</html>
