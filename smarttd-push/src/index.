@@ -1,0 +1,75 @@
+import { sendNotification } from '@pushforge/builder';
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // Endpoint: clave pública VAPID
+    if (path === '/vapid-public-key') {
+      return new Response(env.VAPID_PUBLIC_KEY, {
+        headers: { 'Content-Type': 'text/plain' }
+      });
+    }
+
+    // Endpoint: guardar suscripción
+    if (path === '/subscribe' && request.method === 'POST') {
+      const subscription = await request.json();
+      await env.SUBS.put(subscription.endpoint, JSON.stringify(subscription));
+      return new Response('OK', { status: 200 });
+    }
+
+    // Endpoint: eliminar suscripción
+    if (path === '/unsubscribe' && request.method === 'POST') {
+      const { endpoint } = await request.json();
+      await env.SUBS.delete(endpoint);
+      return new Response('OK', { status: 200 });
+    }
+
+    // Endpoint: publicar mensaje (el que usará el origen del despacho)
+    if (path === '/publish' && request.method === 'POST') {
+      const body = await request.text();
+
+      // 1. Reenviar a ntfy para la app en primer plano
+      await fetch(`https://ntfy.sh/${env.NTFY_TOPIC}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: body
+      });
+
+      // 2. Enviar push a todos los suscriptores
+      const subs = await env.SUBS.list();
+      const promises = subs.keys.map(async (key) => {
+        const subData = await env.SUBS.get(key.name);
+        if (!subData) return;
+        const subscription = JSON.parse(subData);
+        try {
+          await sendNotification(subscription, {
+            title: '📨 NUEVO DESPACHO',
+            body: body.length > 100 ? body.substring(0, 100) + '...' : body,
+            icon: 'icon-192.png',
+            badge: 'icon-192.png',
+            data: { raw: body },
+            actions: [
+              { action: 'aceptar', title: '✅ ACEPTAR' },
+              { action: 'rechazar', title: '❌ RECHAZAR' }
+            ]
+          }, {
+            vapidPublicKey: env.VAPID_PUBLIC_KEY,
+            vapidPrivateKey: env.VAPID_PRIVATE_KEY,
+            vapidSubject: env.VAPID_SUBJECT
+          });
+        } catch (err) {
+          // Si falla, eliminar la suscripción inválida
+          console.error('Error enviando push:', err);
+          await env.SUBS.delete(key.name);
+        }
+      });
+      await Promise.allSettled(promises);
+
+      return new Response('OK', { status: 200 });
+    }
+
+    return new Response('Not found', { status: 404 });
+  }
+};
