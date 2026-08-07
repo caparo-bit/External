@@ -19,7 +19,7 @@
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        /* ========== ESTILOS (idénticos a los que tenías) ========== */
+        /* (tus estilos completos, no los cambio) */
         :root { --bg-dark: #08111f; --card-bg: #0c1526; --header-bg: #1f8a3c; --accent-gold: #f4a623; --accent-blue: #4fa8ff; --accent-green: #22c55e; --accent-red: #ef4444; --text-main: #f0f4fa; --text-muted: #7fa6c9; --table-header: #0f1f33; --border-color: #1e3a5a; }
         * { margin:0; padding:0; box-sizing:border-box; font-family:'Segoe UI', Roboto, system-ui, sans-serif; }
         html { height:100%; }
@@ -250,6 +250,12 @@
                 <div class="config-field">
                     <label for="inputNtfyTopic">Ntfy Topic</label>
                     <input type="text" id="inputNtfyTopic" placeholder="smarttd-monitor" />
+                </div>
+                <!-- ===== PUSH: Botón de activación/desactivación ===== -->
+                <div class="config-actions" style="margin-top:10px;">
+                    <button id="btnTogglePush" style="flex:1; background:#1f8a3c; color:#fff; border:none; border-radius:40px; padding:14px; font-weight:700; cursor:pointer;">
+                        🔔 Activar notificaciones push
+                    </button>
                 </div>
                 <div class="config-actions">
                     <button class="btn-cancel" id="configCancel">Volver</button>
@@ -527,6 +533,13 @@
         const processedMessages = new Set();
 
         // =============================================================
+        // ===== PUSH: VARIABLES Y CONSTANTES =====
+        // =============================================================
+        const PUSH_WORKER_URL = 'https://smarttd-push.tu-usuario.workers.dev'; // CAMBIAR POR TU URL REAL
+        const PUSH_STORAGE_KEY = 'smarttd_push_subscribed';
+        let pushSubscription = null;
+
+        // =============================================================
         // MÁQUINA DE ESTADOS
         // =============================================================
         const STATE_MONITOR = 'MONITOR';
@@ -558,6 +571,9 @@
                 viewConfig.classList.add('active');
                 inputWebhook.value = WEBHOOK_URL;
                 inputNtfyTopic.value = NTFY_TOPIC;
+                // ===== PUSH: actualizar texto del botón =====
+                actualizarBotonPush();
+                document.dispatchEvent(new CustomEvent('viewConfigShown'));
             } else if (newState === STATE_SERVICIO) {
                 ocultarModal();
                 viewServicio.classList.add('active');
@@ -650,7 +666,7 @@
         });
 
         // =============================================================
-        // GEOLOCALIZACIÓN, GEOCODIFICACIÓN Y RUTAS (MEJORADAS)
+        // GEOLOCALIZACIÓN, GEOCODIFICACIÓN Y RUTAS
         // =============================================================
         function obtenerPosicionUsuario() {
             return new Promise((resolve) => {
@@ -676,7 +692,6 @@
             });
         }
 
-        // Función auxiliar para geocodificar una consulta
         async function geocodificar(query) {
             if (!query || query.trim() === '') return null;
             try {
@@ -698,35 +713,25 @@
             }
         }
 
-        // Geocodificación mejorada: prueba varias combinaciones
         async function geocodificarDireccion(direccion, ciudad) {
             if (!direccion || direccion.trim() === '') return null;
-
-            // 1. Dirección + ciudad
             let query = direccion;
             if (ciudad && ciudad.trim()) {
                 query += ', ' + ciudad;
             }
             let coords = await geocodificar(query);
             if (coords) return coords;
-
-            // 2. Solo dirección
             coords = await geocodificar(direccion);
             if (coords) return coords;
-
-            // 3. Partes de la dirección (separadas por coma)
             const partes = direccion.split(',').map(p => p.trim()).filter(p => p.length > 3);
             for (const parte of partes) {
                 coords = await geocodificar(parte);
                 if (coords) return coords;
             }
-
-            // 4. Si hay ciudad pero sin dirección clara, probar con la ciudad
             if (ciudad && ciudad.trim()) {
                 coords = await geocodificar(ciudad);
                 if (coords) return coords;
             }
-
             return null;
         }
 
@@ -781,20 +786,16 @@
         }
 
         // =============================================================
-        // NUEVA FUNCIÓN: extraer dirección de cualquier formato
+        // FUNCIÓN: extraer dirección de cualquier formato
         // =============================================================
         function extraerDireccionDespacho(texto) {
             if (typeof texto !== 'string') return null;
-
             let hora = '--:--';
             let ciudad = '';
             let direccion = '';
             let zona = '';
-
-            // 1. Buscar líneas con formato [N]: valor
             const lineas = texto.split('\n');
             const indices = {};
-
             for (const linea of lineas) {
                 const match = linea.match(/^\[(\d+)\]:\s*(.*)$/);
                 if (match) {
@@ -803,18 +804,13 @@
                     indices[idx] = valor;
                 }
             }
-
-            // 2. Si hay índices, extraer según patrones conocidos
             if (Object.keys(indices).length > 0) {
-                // Hora: suele estar en [0] o en algún campo con formato HH:MM
                 for (const key in indices) {
                     if (/^\d{1,2}:\d{2}/.test(indices[key])) {
                         hora = indices[key];
                         break;
                     }
                 }
-
-                // Dirección: buscar la línea que parece una dirección
                 const patronesDireccion = [/calle/i, /avenida/i, /av\./i, /plaza/i, /pza\./i, /c\. /i, /carretera/i];
                 for (const key in indices) {
                     const valor = indices[key];
@@ -823,8 +819,6 @@
                         break;
                     }
                 }
-
-                // Ciudad: buscar línea que parece ciudad (suele tener guion o ser la última)
                 for (const key in indices) {
                     const valor = indices[key];
                     if (valor.includes('-') && !valor.includes('Tiene Despacho') && !valor.includes(':')) {
@@ -832,8 +826,6 @@
                         break;
                     }
                 }
-
-                // Zona: buscar línea en mayúsculas
                 for (const key in indices) {
                     const valor = indices[key];
                     if (valor === valor.toUpperCase() && valor.length > 3 && !valor.includes('Tiene Despacho') && !valor.includes(':')) {
@@ -841,40 +833,27 @@
                         break;
                     }
                 }
-
-                // Si no encontramos ciudad, buscar en el texto completo
                 if (!ciudad) {
                     const matchCiudad = texto.match(/([A-Z][a-záéíóúñ]+(?:-[A-Z][a-záéíóúñ]+)+)/);
                     if (matchCiudad) ciudad = matchCiudad[1];
                 }
-
                 return { hora, direccion, ciudad, zona };
             }
-
-            // 3. Si no hay índices, buscar en el texto plano
             const lines = texto.split('\n').filter(l => l.trim() !== '');
-            
-            // Buscar hora
             const horaMatch = texto.match(/\b(\d{1,2}:\d{2})\b/);
             if (horaMatch) hora = horaMatch[1];
-
-            // Buscar dirección (línea que contiene calle, avenida, etc.)
             for (const line of lines) {
                 if (/calle|avenida|av\.|plaza|pza\.|c\. /i.test(line)) {
                     direccion = line.trim();
                     break;
                 }
             }
-
-            // Buscar ciudad (línea con guion)
             for (const line of lines) {
                 if (line.includes('-') && !line.includes('Tiene Despacho') && !line.includes(':')) {
                     ciudad = line.trim();
                     break;
                 }
             }
-
-            // Buscar zona (línea en mayúsculas)
             for (const line of lines) {
                 const trimmed = line.trim();
                 if (trimmed === trimmed.toUpperCase() && trimmed.length > 3 && !trimmed.includes('Tiene Despacho') && !trimmed.includes(':')) {
@@ -882,7 +861,6 @@
                     break;
                 }
             }
-
             return { hora, direccion, ciudad, zona };
         }
 
@@ -899,21 +877,17 @@
                 console.error('[MAP] Contenedor #map no encontrado');
                 return;
             }
-
             console.log('[MAP] Inicializando Leaflet...');
             mapContainer.style.height = '100%';
-            
             try {
                 mapInstance = L.map(mapContainer, {
                     zoomControl: true,
                     fadeAnimation: true,
                     attributionControl: true
                 }).setView([40.4168, -3.7038], 13);
-
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                     attribution: '© OpenStreetMap contributors'
                 }).addTo(mapInstance);
-
                 mapInitialized = true;
                 console.log('[MAP] Leaflet inicializado correctamente');
                 setTimeout(() => {
@@ -933,15 +907,12 @@
                 initMap();
                 if (!mapInstance) return;
             }
-
             console.log('[MAP] Actualizando mapa...');
-
             mapInstance.eachLayer((layer) => {
                 if (layer instanceof L.Marker || layer instanceof L.Polyline || layer instanceof L.Polygon || layer instanceof L.LayerGroup) {
                     mapInstance.removeLayer(layer);
                 }
             });
-
             if (!despachoLat || !despachoLon) {
                 console.warn('[MAP] No hay coordenadas de despacho, mostrando mensaje');
                 const msg = L.divIcon({
@@ -955,10 +926,8 @@
                 mapInstance.invalidateSize();
                 return;
             }
-
             console.log('[MAP] Coordenadas de despacho:', despachoLat, despachoLon);
             console.log('[MAP] Dirección:', despachoDireccion);
-
             if (!userLat || !userLon) {
                 console.warn('[MAP] Sin ubicación de usuario, mostrando solo destino');
                 L.marker([despachoLat, despachoLon], {
@@ -968,15 +937,12 @@
                 mapInstance.invalidateSize();
                 return;
             }
-
             L.marker([userLat, userLon], {
                 icon: L.icon({ iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png', shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png' })
             }).addTo(mapInstance).bindPopup('📍 Tu ubicación');
-
             L.marker([despachoLat, despachoLon], {
                 icon: L.icon({ iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png', shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png' })
             }).addTo(mapInstance).bindPopup('📌 ' + despachoDireccion);
-
             if (routeGeometry && routeGeometry.length > 1) {
                 console.log('[MAP] Dibujando ruta con', routeGeometry.length, 'puntos');
                 L.polyline(routeGeometry, { color: '#4fa8ff', weight: 5, opacity: 0.8 })
@@ -991,7 +957,6 @@
                     opacity: 0.6
                 }).addTo(mapInstance).bindPopup('⚠️ Distancia en línea recta (sin ruta)');
             }
-
             const bounds = L.latLngBounds([
                 [userLat, userLon],
                 [despachoLat, despachoLon]
@@ -1016,7 +981,6 @@
                 audioCtx.resume().catch(() => {});
             }
         }
-
         document.addEventListener('click', initAudio, { once: true });
         document.addEventListener('touchstart', initAudio, { once: true });
 
@@ -1045,7 +1009,6 @@
                 gain.connect(audioCtx.destination);
                 osc.start();
                 osc.stop(audioCtx.currentTime + 0.6);
-
                 setTimeout(() => {
                     try {
                         const osc2 = audioCtx.createOscillator();
@@ -1067,12 +1030,10 @@
             detenerAlertaDespacho();
             reproducirSonido();
             if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
-
             despachoAudioInterval = setInterval(() => {
                 reproducirSonido();
                 if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
             }, 1300);
-
             despachoTimeout = setTimeout(() => {
                 detenerAlertaDespacho();
             }, 30000);
@@ -1218,7 +1179,6 @@
             return acumulado;
         }
 
-        // Parseo antiguo (se mantiene por compatibilidad)
         function parsearDespachoTexto(texto) {
             if (typeof texto !== 'string') return null;
             const lineas = texto.split('\n');
@@ -1227,7 +1187,6 @@
             let direccion = '';
             let zona = '';
             let tieneDespacho = false;
-
             for (let linea of lineas) {
                 linea = linea.trim();
                 const match = linea.match(/^\[(\d+)\]:\s*(.*)$/);
@@ -1245,7 +1204,6 @@
                     if (linea.includes('Tiene Despacho')) tieneDespacho = true;
                 }
             }
-
             if (!tieneDespacho) return null;
             if (!direccion && ciudad) {
                 direccion = ciudad;
@@ -1261,7 +1219,7 @@
         }
 
         // =============================================================
-        // PARSERS (sin cambios)
+        // PARSERS
         // =============================================================
         function parseDetalleServicios(data) {
             if (!data || typeof data !== 'object') return null;
@@ -1272,7 +1230,6 @@
             }
             if (!normalized.tvPickupTime && !normalized.txButtonText) return null;
             if (normalized.tvOnStop || normalized.tvOnZone) return null;
-
             const timeKeys = Object.keys(normalized).filter(k => k === 'tvPickupTime' || k.startsWith('tvPickupTime$'));
             const times = [];
             timeKeys.forEach(key => {
@@ -1284,7 +1241,6 @@
                 times.push({ index, time: normalized[key] });
             });
             times.sort((a, b) => a.index - b.index);
-
             return {
                 title: normalized.tvHeaderText || 'R: RUTA',
                 zoneName: normalized.tvZoneName || '---',
@@ -1301,7 +1257,6 @@
             }
             const carKeys = Object.keys(normalized).filter(k => k === 'tvCarInfo' || k.startsWith('tvCarInfo$'));
             if (carKeys.length === 0) return null;
-
             const carItems = [];
             carKeys.forEach(key => {
                 let index = 1;
@@ -1312,7 +1267,6 @@
                 carItems.push({ index, text: normalized[key] });
             });
             carItems.sort((a, b) => a.index - b.index);
-
             return {
                 title: normalized.tvHeaderText || normalized.tvTitle || 'PARADA',
                 cars: carItems
@@ -1326,19 +1280,16 @@
                 let newKey = key.startsWith('ifac.td.smarttd:id/') ? key.replace('ifac.td.smarttd:id/', '') : key;
                 normalized[newKey] = data[key];
             }
-
             const tieneCamposMonitor = Object.keys(normalized).some(k => 
                 k.startsWith('tvZoneName') || k.startsWith('tvOnStop') || 
                 k.startsWith('tvOnZone') || k.startsWith('tvTrips') || k.startsWith('tvHired')
             );
             if (!tieneCamposMonitor) return null;
-
             const rowsMap = {};
             function getRow(idx) {
                 if (!rowsMap[idx]) rowsMap[idx] = { name: '', P: 0, Z: 0, S: 0, R: 0 };
                 return rowsMap[idx];
             }
-
             for (const key in normalized) {
                 const val = normalized[key];
                 let idx = -1;
@@ -1351,7 +1302,6 @@
                     getRow(idx).name = val.trim();
                 }
             }
-
             for (const key in normalized) {
                 const match = key.match(/\$(\d+)$/);
                 if (!match) continue;
@@ -1363,13 +1313,11 @@
                 else if (key.startsWith('tvHired')) getRow(idx).S = Number(val) || 0;
                 else if (key.startsWith('tvTrips')) getRow(idx).R = Number(val) || 0;
             }
-
             const tableData = Object.keys(rowsMap)
                 .map(Number)
                 .sort((a, b) => a - b)
                 .map(idx => rowsMap[idx])
                 .filter(row => row.name !== '');
-
             return {
                 headerText: normalized.tvHeaderText || null,
                 bottomBarText: normalized.txInfoStateBottomBar || null,
@@ -1384,11 +1332,9 @@
                 let newKey = key.startsWith('ifac.td.smarttd:id/') ? key.replace('ifac.td.smarttd:id/', '') : key;
                 normalized[newKey] = data[key];
             }
-            
             if (!normalized.txInfoAction || !normalized.txInfoAction.includes("Tiene Despacho")) {
                 return null;
             }
-
             const direccion = normalized.txSimpleAdress 
                            || normalized.tvPickup 
                            || normalized.tvAddress 
@@ -1396,27 +1342,22 @@
                            || normalized.direccion 
                            || normalized.address 
                            || "";
-
             const ciudad = normalized.txCity 
                         || normalized.tvCity 
                         || normalized.ciudad 
                         || "";
-
             const zona = normalized.txPickUpZone 
                       || normalized.tvZona 
                       || normalized.zona 
                       || "";
-
             const hora = normalized.txHour 
                       || normalized.tvPickupTime 
                       || normalized.hora 
                       || "--:--";
-
             if (!direccion.trim()) {
                 console.warn('[parseOferta] Dirección vacía, no se puede procesar.');
                 return null;
             }
-
             return {
                 hora: hora,
                 direccion: direccion,
@@ -1460,7 +1401,7 @@
         }
 
         // =============================================================
-        // RENDERS (sin cambios)
+        // RENDERS
         // =============================================================
         function renderDetalleServicios(routeData) {
             zoneTitleEl.textContent = routeData.title;
@@ -1490,7 +1431,6 @@
             setViewState(STATE_MONITOR);
             if (monitorData.headerText) zoneTitleEl.textContent = monitorData.headerText;
             if (monitorData.bottomBarText) libreBtn.textContent = monitorData.bottomBarText.toUpperCase();
-
             const data = monitorData.tableData || [];
             const currentZone = currentZoneName();
             let html = '';
@@ -1509,7 +1449,6 @@
                         </tr>`;
             });
             tableBody.innerHTML = html;
-
             const totalP = data.reduce((a, r) => a + (Number(r.P) || 0), 0);
             const totalZ = data.reduce((a, r) => a + (Number(r.Z) || 0), 0);
             const totalS = data.reduce((a, r) => a + (Number(r.S) || 0), 0);
@@ -1524,16 +1463,13 @@
             console.log('[renderDespachoConRuta] Ciudad:', ciudad);
             console.log('[renderDespachoConRuta] Zona:', zona);
             console.log('[renderDespachoConRuta] Hora:', hora);
-
             if (!direccionTexto || direccionTexto.trim() === '') {
                 console.error('[renderDespachoConRuta] Dirección vacía.');
                 mostrarModalSimple(direccionTexto || 'Dirección no disponible', ciudad || '', zona, hora, pregunta);
                 return;
             }
-
             console.log('[DESPACHO] Renderizando con ruta para:', direccionTexto, ciudad);
             limpiarDatosRuta();
-
             const userPos = await obtenerPosicionUsuario();
             if (!userPos) {
                 console.warn('[DESPACHO] Sin ubicación de usuario');
@@ -1541,11 +1477,8 @@
                 mostrarModalSimple(direccionTexto, ciudad, zona, hora, pregunta);
                 return;
             }
-
             userLat = userPos.lat;
             userLon = userPos.lon;
-
-            // Usar geocodificación mejorada
             const coords = await geocodificarDireccion(direccionTexto, ciudad);
             if (!coords) {
                 console.warn('[DESPACHO] No se pudo geocodificar la dirección');
@@ -1553,12 +1486,10 @@
                 mostrarModalSimple(direccionTexto, ciudad, zona, hora, pregunta);
                 return;
             }
-
             despachoLat = coords.lat;
             despachoLon = coords.lon;
             despachoDireccion = direccionTexto + (ciudad ? ', ' + ciudad : '');
             console.log('[DESPACHO] Coordenadas de destino:', despachoLat, despachoLon);
-
             const ruta = await obtenerRutaOSRM(userLat, userLon, despachoLat, despachoLon);
             let distanciaKm, tiempoMin, geometria;
             if (ruta) {
@@ -1578,7 +1509,6 @@
                 console.warn('[DESPACHO] Sin ruta OSRM, usando distancia lineal');
                 setToast('⚠️ Ruta por carretera no disponible, usando distancia lineal', 'warning');
             }
-
             const html = `
                 <div style="font-size:1.2rem; font-weight:700; color:#f4c542; margin-bottom:8px;">${escapeHtml(hora)}</div>
                 <div style="margin-bottom:8px; line-height:1.5;">
@@ -1660,16 +1590,14 @@
         });
 
         // =============================================================
-        // PROCESADOR GENERAL DE MENSAJES (MEJORADO)
+        // PROCESADOR GENERAL DE MENSAJES
         // =============================================================
         async function processIncomingMessage(rawPayload) {
             console.log("========== MENSAJE RECIBIDO ==========");
             console.log("RAW:", rawPayload);
             console.log("TIPO:", typeof rawPayload);
-
             try {
                 let jsonPayload = null;
-
                 if (typeof rawPayload === 'string') {
                     const trimmed = rawPayload.trim();
                     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
@@ -1684,8 +1612,6 @@
                 } else {
                     jsonPayload = rawPayload;
                 }
-
-                // Desenvolver mensaje de ntfy
                 if (jsonPayload && typeof jsonPayload === 'object' && jsonPayload.message) {
                     if (typeof jsonPayload.message === 'string') {
                         const trimmedMsg = jsonPayload.message.trim();
@@ -1702,21 +1628,14 @@
                         jsonPayload = jsonPayload.message;
                     }
                 }
-
                 console.log("JSON FINAL:", jsonPayload);
                 console.log("=======================================");
-
-                // ===== DETECCIÓN DE DESPACHO =====
                 let esDespacho = false;
                 let textoDespacho = '';
-
-                // 1. Si es JSON y tiene type: 'despacho' (formato futuro)
                 if (jsonPayload && typeof jsonPayload === 'object' && jsonPayload.type === 'despacho') {
                     esDespacho = true;
                     textoDespacho = JSON.stringify(jsonPayload);
                 }
-
-                // 2. Si contiene la cadena "Tiene Despacho"
                 if (!esDespacho) {
                     if (typeof jsonPayload === 'string') {
                         if (jsonPayload.includes('Tiene Despacho')) {
@@ -1731,15 +1650,10 @@
                         }
                     }
                 }
-
                 if (esDespacho) {
                     console.log('[DESPACHO] ¡Despacho detectado!');
                     limpiarDatosRuta();
-
-                    // Intento 1: parseOferta (JSON estructurado)
                     let ofertaParsed = parseOferta(jsonPayload);
-                    
-                    // Intento 2: extraerDireccionDespacho (texto flexible)
                     if (!ofertaParsed && typeof textoDespacho === 'string') {
                         const extraido = extraerDireccionDespacho(textoDespacho);
                         if (extraido && extraido.direccion) {
@@ -1752,15 +1666,12 @@
                             };
                         }
                     }
-
-                    // Intento 3: parsearDespachoTexto (formato [N]: ...)
                     if (!ofertaParsed && typeof textoDespacho === 'string') {
                         const parseado = parsearDespachoTexto(textoDespacho);
                         if (parseado) {
                             ofertaParsed = parseado;
                         }
                     }
-
                     if (ofertaParsed) {
                         console.log('[DESPACHO] Oferta estructurada:', ofertaParsed);
                         await renderDespachoConRuta(
@@ -1777,28 +1688,23 @@
                     setToast('📨 ¡Nuevo despacho!', 'warning');
                     return;
                 }
-
-                // ===== RESTANTES PARSERS (Monitor, Servicio, etc.) =====
                 const servicioParsed = parseServicio(jsonPayload);
                 if (servicioParsed) {
                     renderServicio(servicioParsed);
                     return;
                 }
-
                 const detalleServiciosParsed = parseDetalleServicios(jsonPayload);
                 if (detalleServiciosParsed) {
                     renderDetalleServicios(detalleServiciosParsed);
                     updateTimestamp();
                     return;
                 }
-
                 const detalleParadaParsed = parseDetalleParada(jsonPayload);
                 if (detalleParadaParsed) {
                     renderDetalleParada(detalleParadaParsed);
                     updateTimestamp();
                     return;
                 }
-
                 const monitorParsed = parseMonitor(jsonPayload);
                 if (monitorParsed) {
                     renderMonitor(monitorParsed);
@@ -1806,11 +1712,9 @@
                     setToast(`✅ Monitor actualizado (${monitorParsed.tableData.length} zonas)`, 'success');
                     return;
                 }
-
                 console.warn('⚠️ Mensaje no reconocido:', jsonPayload);
                 logToConsole('warn', 'Mensaje no reconocido', jsonPayload);
                 setToast('⚠️ Datos no reconocidos (ver consola)', 'warning');
-
             } catch (e) {
                 console.error('[PROCESS] Error en processIncomingMessage:', e);
                 logToConsole('error', 'Error al procesar mensaje', e.message);
@@ -1849,15 +1753,12 @@
             console.log('[NTFY] Conectando a:', NTFY_SSE_URL);
             setToast('🔄 Conectando a ntfy.sh...', 'info');
             setStatus(false, 'Conectando...');
-
             try {
                 if (eventSource) {
                     eventSource.close();
                     eventSource = null;
                 }
-
                 eventSource = new EventSource(NTFY_SSE_URL);
-
                 eventSource.onopen = function() {
                     reconnectAttempts = 0;
                     setToast('✅ Conectado, esperando datos...', 'success');
@@ -1865,7 +1766,6 @@
                     lastMessageTime = Date.now();
                     console.log('[NTFY] Conexión abierta');
                 };
-
                 eventSource.onmessage = function(event) {
                     const raw = event.data;
                     if (raw === 'ping' || raw === 'keepalive') return;
@@ -1873,7 +1773,6 @@
                     setStatus(true, 'Conectado');
                     processIncomingMessage(raw);
                 };
-
                 eventSource.onerror = function() {
                     setStatus(false, 'NO CONECTADO');
                     setToast('⚠️ Error en conexión ntfy', 'error');
@@ -1887,18 +1786,131 @@
                         }
                     }, delay);
                 };
-
                 setInterval(() => {
                     if (connected && Date.now() - lastMessageTime > 15000) {
                         setStatus(false, 'NO CONECTADO');
                         setToast('⏳ Sin datos desde hace 15s', 'warning');
                     }
                 }, 5000);
-
             } catch (e) {
                 console.error('[NTFY] Excepción:', e);
                 setToast('❌ Error al conectar: ' + e.message, 'error');
                 setStatus(false, 'NO CONECTADO');
+            }
+        }
+
+        // =============================================================
+        // ===== PUSH: FUNCIONES DE SUSCRIPCIÓN =====
+        // =============================================================
+
+        // Helper para convertir clave VAPID de base64 URL a Uint8Array
+        function urlBase64ToUint8Array(base64String) {
+            const padding = '='.repeat((4 - base64String.length % 4) % 4);
+            const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+            const rawData = window.atob(base64);
+            const outputArray = new Uint8Array(rawData.length);
+            for (let i = 0; i < rawData.length; ++i) {
+                outputArray[i] = rawData.charCodeAt(i);
+            }
+            return outputArray;
+        }
+
+        // Suscribirse a push
+        async function suscribirseAPush() {
+            if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+                setToast('❌ Tu navegador no soporta notificaciones push.', 'error');
+                return false;
+            }
+            if (Notification.permission === 'denied') {
+                setToast('❌ Permiso de notificaciones denegado. Actívalo en ajustes.', 'error');
+                return false;
+            }
+            if (Notification.permission === 'default') {
+                const perm = await Notification.requestPermission();
+                if (perm !== 'granted') {
+                    setToast('❌ Permiso denegado.', 'error');
+                    return false;
+                }
+            }
+            try {
+                const registration = await navigator.serviceWorker.ready;
+                const resp = await fetch(`${PUSH_WORKER_URL}/vapid-public-key`);
+                if (!resp.ok) throw new Error('No se pudo obtener la clave VAPID');
+                const vapidPublicKey = await resp.text();
+                pushSubscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+                });
+                const saveResp = await fetch(`${PUSH_WORKER_URL}/subscribe`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(pushSubscription)
+                });
+                if (!saveResp.ok) throw new Error('Error al guardar suscripción en el servidor');
+                localStorage.setItem(PUSH_STORAGE_KEY, 'true');
+                setToast('✅ Notificaciones push activadas correctamente.', 'success');
+                actualizarBotonPush();
+                return true;
+            } catch (err) {
+                console.error('[Push] Error:', err);
+                setToast('❌ No se pudo activar: ' + err.message, 'error');
+                return false;
+            }
+        }
+
+        // Desuscribirse de push
+        async function desuscribirseDePush() {
+            try {
+                const registration = await navigator.serviceWorker.ready;
+                const subscription = await registration.pushManager.getSubscription();
+                if (subscription) {
+                    await subscription.unsubscribe();
+                    await fetch(`${PUSH_WORKER_URL}/unsubscribe`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ endpoint: subscription.endpoint })
+                    });
+                }
+                localStorage.removeItem(PUSH_STORAGE_KEY);
+                pushSubscription = null;
+                setToast('🔕 Notificaciones push desactivadas.', 'info');
+                actualizarBotonPush();
+            } catch (err) {
+                console.error('[Push] Error al desuscribir:', err);
+                setToast('❌ Error al desactivar.', 'error');
+            }
+        }
+
+        // Comprobar estado de la suscripción al cargar la app
+        async function comprobarEstadoPush() {
+            if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+            try {
+                const registration = await navigator.serviceWorker.ready;
+                const subscription = await registration.pushManager.getSubscription();
+                const guardado = localStorage.getItem(PUSH_STORAGE_KEY) === 'true';
+                if (subscription && guardado) {
+                    pushSubscription = subscription;
+                    console.log('[Push] Ya suscrito.');
+                } else if (subscription && !guardado) {
+                    await subscription.unsubscribe();
+                    localStorage.removeItem(PUSH_STORAGE_KEY);
+                } else if (!subscription && guardado) {
+                    localStorage.removeItem(PUSH_STORAGE_KEY);
+                }
+                actualizarBotonPush();
+            } catch (e) {
+                console.warn('[Push] No se pudo comprobar estado:', e);
+            }
+        }
+
+        // Actualizar texto del botón de push en configuración
+        function actualizarBotonPush() {
+            const btn = document.getElementById('btnTogglePush');
+            if (!btn) return;
+            if (localStorage.getItem(PUSH_STORAGE_KEY) === 'true') {
+                btn.textContent = '🔕 Desactivar notificaciones push';
+            } else {
+                btn.textContent = '🔔 Activar notificaciones push';
             }
         }
 
@@ -1994,6 +2006,8 @@
                 .then(reg => {
                     console.log('✅ SW registrado correctamente');
                     logToConsole('info', 'Service Worker registrado');
+                    // ===== PUSH: comprobar estado después de registrar =====
+                    setTimeout(comprobarEstadoPush, 500);
                 })
                 .catch(err => {
                     console.error('❌ Error al registrar SW:', err);
@@ -2013,7 +2027,6 @@
                 wakeLock = await navigator.wakeLock.request('screen');
             } catch (err) {}
         }
-
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
                 solicitarWakeLock();
@@ -2040,7 +2053,6 @@
         // =============================================================
         const installBtn = document.getElementById('installPwaBtn');
         let deferredPrompt = null;
-
         const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
         if (isStandalone) {
             installBtn.style.display = 'none';
@@ -2050,13 +2062,11 @@
                 deferredPrompt = e;
                 installBtn.style.display = 'none';
             });
-
             setTimeout(() => {
                 if (!isStandalone && !deferredPrompt) {
                     installBtn.style.display = 'flex';
                 }
             }, 5000);
-
             installBtn.addEventListener('click', async () => {
                 if (deferredPrompt) {
                     deferredPrompt.prompt();
@@ -2072,12 +2082,30 @@
                     setToast('📲 Abre el menú de Chrome y selecciona "Agregar a la pantalla de inicio"', 'info');
                 }
             });
-
             window.addEventListener('appinstalled', () => {
                 installBtn.style.display = 'none';
                 setToast('🎉 App instalada correctamente', 'success');
             });
         }
+
+        // ===== PUSH: Evento para actualizar botón al mostrar configuración =====
+        document.addEventListener('viewConfigShown', () => {
+            actualizarBotonPush();
+        });
+
+        // ===== PUSH: Botón de activación/desactivación =====
+        const btnTogglePush = document.getElementById('btnTogglePush');
+        if (btnTogglePush) {
+            btnTogglePush.addEventListener('click', async () => {
+                if (localStorage.getItem(PUSH_STORAGE_KEY) === 'true') {
+                    await desuscribirseDePush();
+                } else {
+                    await suscribirseAPush();
+                }
+            });
+        }
+
+        console.log('📡 Web Push configurado con Worker en:', PUSH_WORKER_URL);
     </script>
 </body>
-    </html>
+</html>
